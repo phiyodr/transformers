@@ -19,7 +19,7 @@ import copy
 from ...configuration_utils import PretrainedConfig
 from ...utils import logging
 from ..auto.configuration_auto import AutoConfig
-from ..clip.configuration_clip import CLIPVisionConfig
+from ..clip.configuration_clip import CLIPVisionConfig, CLIPTextConfig
 
 
 logger = logging.get_logger(__name__)
@@ -90,6 +90,7 @@ class VisionTextDualEncoderConfig(PretrainedConfig):
         vision_model_type = vision_config.pop("model_type")
         text_model_type = text_config.pop("model_type")
 
+        # vision_config
         if vision_model_type == "clip":
             self.vision_config = AutoConfig.for_model(vision_model_type, **vision_config).vision_config
         elif vision_model_type == "clip_vision_model":
@@ -97,7 +98,15 @@ class VisionTextDualEncoderConfig(PretrainedConfig):
         else:
             self.vision_config = AutoConfig.for_model(vision_model_type, **vision_config)
 
-        self.text_config = AutoConfig.for_model(text_model_type, **text_config)
+        # text_config TODO
+        #self.text_config = AutoConfig.for_model(text_model_type, **text_config)
+
+        if text_model_type == "clip":
+            self.text_config = AutoConfig.for_model(text_model_type, **text_config).text_config
+        elif text_model_type == "clip_text_model":
+            self.text_config = CLIPTextConfig(**text_config)
+        else:
+            self.text_config = AutoConfig.for_model(text_model_type, **text_config)
 
         self.projection_dim = projection_dim
         self.logit_scale_init_value = logit_scale_init_value

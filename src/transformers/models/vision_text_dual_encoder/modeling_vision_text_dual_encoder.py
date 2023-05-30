@@ -24,7 +24,7 @@ from ...modeling_utils import PreTrainedModel
 from ...utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
 from ..auto.configuration_auto import AutoConfig
 from ..auto.modeling_auto import AutoModel
-from ..clip.modeling_clip import CLIPOutput, CLIPVisionConfig, CLIPVisionModel
+from ..clip.modeling_clip import CLIPOutput, CLIPVisionConfig, CLIPVisionModel, CLIPTextConfig, CLIPTextModel
 from .configuration_vision_text_dual_encoder import VisionTextDualEncoderConfig
 
 
@@ -188,7 +188,10 @@ class VisionTextDualEncoderModel(PreTrainedModel):
                 vision_model = AutoModel.from_config(config.vision_config)
 
         if text_model is None:
-            text_model = AutoModel.from_config(config.text_config)
+            if isinstance(config.text_config, CLIPTextConfig):
+                text_model = CLIPTextModel(config.text_config)
+            else:
+                text_model = AutoModel.from_config(config.text_config)
 
         self.vision_model = vision_model
         self.text_model = text_model
@@ -233,15 +236,26 @@ class VisionTextDualEncoderModel(PreTrainedModel):
         >>> inputs = tokenizer(["una foto di un gatto", "una foto di un cane"], padding=True, return_tensors="pt")
         >>> text_features = model.get_text_features(**inputs)
         ```"""
-        text_outputs = self.text_model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            token_type_ids=token_type_ids,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
+        #import pdb; pdb.set_trace()
+        if isinstance(self.config.text_config, CLIPTextConfig):
+            text_outputs = self.text_model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+        else:
+            text_outputs = self.text_model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                token_type_ids=token_type_ids,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
 
         pooled_output = text_outputs[1]
         text_features = self.text_projection(pooled_output)
@@ -359,31 +373,41 @@ class VisionTextDualEncoderModel(PreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-        )
+        )# ['last_hidden_state', torch.Size([64, 50, 768]) 'pooler_output' torch.Size([64, 768])
 
-        text_outputs = self.text_model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        )
+        if isinstance(self.config.text_config, CLIPTextConfig):
+            text_outputs = self.text_model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            )
+        else:
+            text_outputs = self.text_model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                token_type_ids=token_type_ids,
+                position_ids=position_ids,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+            ) # text_outputs["last_hidden_state"].shape torch.Size([64, 128, 768]) text_outputs["pooler_output"] torch.Size([64, 768])
 
         image_embeds = vision_outputs[1]  # pooler_output
-        image_embeds = self.visual_projection(image_embeds)
+        image_embeds = self.visual_projection(image_embeds) # image_embeds.shape torch.Size([64, 512])
 
         text_embeds = text_outputs[1]  # pooler_output
-        text_embeds = self.text_projection(text_embeds)
+        text_embeds = self.text_projection(text_embeds) # text_embeds.shape torch.Size([64, 512])
 
         # normalized features
         image_embeds = image_embeds / image_embeds.norm(dim=-1, keepdim=True)
         text_embeds = text_embeds / text_embeds.norm(dim=-1, keepdim=True)
 
         # cosine similarity as logits
-        logit_scale = self.logit_scale.exp()
-        logits_per_text = torch.matmul(text_embeds, image_embeds.t()) * logit_scale
+        logit_scale = self.logit_scale.exp() # Parameter containing: tensor(2.6592); self.logit_scale.exp() tensor(14.2849, device='cuda:0')
+        logits_per_text = torch.matmul(text_embeds, image_embeds.t()) * logit_scale # torch.Size([64, 64])
         logits_per_image = logits_per_text.T
 
         loss = None
@@ -518,7 +542,15 @@ class VisionTextDualEncoderModel(PreTrainedModel):
                 text_config = AutoConfig.from_pretrained(text_model_name_or_path)
                 kwargs_text["config"] = text_config
 
-            text_model = AutoModel.from_pretrained(text_model_name_or_path, *model_args, **kwargs_text)
+            if text_config.model_type == "clip":
+                kwargs_text["config"] = text_config.text_config
+                text_model = CLIPTextModel.from_pretrained(text_model_name_or_path, *model_args, **kwargs_text)
+                # TODO: Should we use the pre-trained projection as well ?
+            else:
+                kwargs_text["config"] = text_config
+                text_model = AutoModel.from_pretrained(text_model_name_or_path, *model_args, **kwargs_text)
+
+            #text_model = AutoModel.from_pretrained(text_model_name_or_path, *model_args, **kwargs_text)
 
         # instantiate config with corresponding kwargs
         config = VisionTextDualEncoderConfig.from_vision_text_configs(vision_model.config, text_model.config, **kwargs)
